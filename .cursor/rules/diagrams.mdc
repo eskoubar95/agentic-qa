@@ -1,0 +1,182 @@
+---
+description: Mermaid diagrams for deployment, user journey, execution, data model, and self-healing flow
+alwaysApply: true
+---
+
+# Agentic QA – Flows (Mermaid)
+
+Use these diagrams to understand how components and flows fit together. Prefer updating them when changing architecture or flows.
+
+## Deployment
+
+```mermaid
+graph TD
+    User[User Browser]
+    NextJS[Next.js Frontend / Railway]
+    FastAPI[FastAPI Backend / Railway]
+    NeonDB[(NeonDB Postgres)]
+    Upstash[(Upstash Redis Streams)]
+    OpenRouter[OpenRouter API / Claude 3.5]
+
+    User -->|HTTPS| NextJS
+    NextJS -->|API Proxy REST| FastAPI
+    NextJS -->|Direct Read Server Components| NeonDB
+    FastAPI -->|Read/Write| NeonDB
+    FastAPI -->|Queue + Events Streams| Upstash
+    FastAPI -->|LLM Calls| OpenRouter
+    User -->|SSE EventSource| FastAPI
+```
+
+## User Journey (high level)
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Landing
+    participant CreateTest
+    participant TestDetail
+    participant Results
+    participant Dashboard
+
+    User->>Landing: Visit platform
+    Landing->>User: Hero + features
+    User->>Landing: Get Started
+    Landing->>CreateTest: Redirect
+    CreateTest->>User: Form builder
+    User->>CreateTest: Build steps, Save Test
+    CreateTest->>TestDetail: Redirect with test ID
+    TestDetail->>User: Test definition
+    User->>TestDetail: Run Test
+    TestDetail->>Results: Redirect /results/run_id
+    Results->>User: Live log stream SSE
+    Results->>User: Auto-update final results
+    User->>Dashboard: Navigate
+    Dashboard->>User: Test in table
+```
+
+## Execution (create → run → stream)
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant NextJS as Next.js
+    participant API as Next.js API
+    participant FastAPI
+    participant Worker as Run Worker
+    participant Playwright
+    participant LLM as OpenRouter
+    participant Redis
+    participant DB as NeonDB
+
+    User->>NextJS: Create test
+    NextJS->>API: POST /api/tests
+    API->>FastAPI: POST /tests
+    FastAPI->>DB: INSERT test
+    FastAPI-->>NextJS: Test ID
+
+    User->>NextJS: Run test
+    NextJS->>API: POST /api/test/run
+    API->>FastAPI: POST /test/run
+    FastAPI->>DB: CREATE test_run
+    FastAPI->>Redis: XADD runs:queue
+    FastAPI-->>NextJS: run_id
+    NextJS->>User: Redirect /results/run_id
+    NextJS->>FastAPI: SSE /results/run_id/stream
+
+    Worker->>Redis: XREADGROUP consume job
+    Worker->>Playwright: Launch browser
+    Worker->>Redis: XADD run_events:run_id
+    Redis-->>NextJS: Stream log/screenshot
+
+    loop Per step
+        Worker->>Playwright: Execute step
+        alt Selector/DOM fail
+            Worker->>Playwright: Screenshot
+            Worker->>LLM: Analyze screenshot
+            LLM-->>Worker: Coordinates
+            Worker->>Playwright: Click coordinates
+        end
+        Worker->>Redis: XADD run_events
+        Redis-->>NextJS: Update
+    end
+
+    Worker->>DB: UPDATE test_run results
+    Worker->>Redis: XADD complete
+    Redis-->>NextJS: Final update
+```
+
+## Data model
+
+```mermaid
+erDiagram
+    tests ||--o{ test_runs : "has many"
+    tests {
+        uuid id PK
+        uuid user_id
+        text name
+        text url
+        jsonb definition
+        boolean auto_handle_popups
+        timestamptz created_at
+    }
+    test_runs {
+        uuid id PK
+        uuid test_id FK
+        text status
+        jsonb screenshots
+        jsonb logs
+        jsonb step_results
+        boolean self_healed
+        integer llm_calls
+        decimal cost_usd
+    }
+    session_memory {
+        uuid id PK
+        text instruction_hash UK
+        text page_url
+        jsonb action_data
+        float reliability_score
+    }
+```
+
+## Self-healing (per step)
+
+```mermaid
+flowchart LR
+    A[Step start] --> B{Advanced selector?}
+    B -->|Yes| C[Try Playwright selector]
+    C --> D{OK?}
+    D -->|Yes| E[Execute · strategy=selector]
+    D -->|No| F[DOM: text/role/label]
+    B -->|No| F
+    F --> G{OK?}
+    G -->|Yes| H[Execute · strategy=dom]
+    G -->|No| I[Screenshot → LLM]
+    I --> J[Click/fill at coordinates]
+    J --> K[Execute · strategy=vision, self_healed=true]
+    E --> L[Record step_result]
+    H --> L
+    K --> L
+```
+
+## REST vs SSE
+
+```mermaid
+flowchart TB
+    subgraph Frontend
+        FC[Client components]
+        SC[Server Components]
+    end
+    subgraph Next.js
+        API["/api/* routes"]
+    end
+    subgraph FastAPI
+        REST[REST endpoints]
+        SSE["/results/id/stream SSE"]
+    end
+    SC -->|Read| Neon[(NeonDB)]
+    FC -->|POST/GET/PUT/DELETE| API
+    API --> REST
+    FC -->|EventSource| SSE
+    REST --> Neon
+```
