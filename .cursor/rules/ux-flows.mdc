@@ -1,0 +1,29 @@
+---
+description: User journeys, navigation, and UX consistency
+globs: frontend/**/*
+alwaysApply: false
+---
+
+# UX & User Flows
+
+**Diagram:** `.cursor/rules/diagrams.mdc` – "User Journey" sequence for high-level flow.
+
+## Navigation
+
+- Sidebar (all pages): Dashboard, Create Test, All Tests, Recent Runs. Collapsible.
+- No signup for MVP; "Get Started" → Create Test. Run available from Dashboard (⋮), Test Detail, All Tests (⋮).
+
+## Critical Flows
+
+1. **Create Test**: Name, target URL, steps (action type + natural language; optional advanced selector for Click/Fill). Toggle "Auto-handle common popups" (default ON). Save → redirect to Test Detail.
+2. **Run Test**: Run → redirect to `/results/{run_id}`. Live log stream (SSE); auto-update on completion. Show Pass/Fail hero, duration, cost, LLM calls.
+3. **Results**: Step timeline with status icon (✓/✗/⚡), screenshot thumbnails (click to enlarge). Expandable "Self-Healing Details" (selector failed → vision fallback + confidence). Failure: highlight step, error message, screenshot. Actions: Run Again, Back to Test, Edit Test.
+4. **All Tests**: Table columns – Test Name, Last Run Status, Last Run Time, Actions. ⋮ menu: Run, View, Edit, Delete (confirm delete).
+5. **Test Detail**: Header with Run Test; definition (steps with type + instruction); latest run summary; run history table (last 10); Edit / Delete.
+6. **Empty state**: Dashboard with zero tests shows onboarding wizard; "Create Your First Test" → Create Test. Wizard hidden after first test exists.
+
+## Principles
+
+- Immediate action: Get Started → Create Test; Run available from multiple entry points.
+- Pass/Fail is the hero; self-healing visible but not overwhelming.
+- Real-time: SSE for execution; no manual refresh. Progressive disclosure for self-healing and error details.

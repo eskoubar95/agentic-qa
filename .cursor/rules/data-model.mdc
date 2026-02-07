@@ -1,0 +1,44 @@
+---
+description: Data model, JSONB schemas, and retention
+globs: **/*.sql, backend/**/models/**, frontend/**/lib/types*
+alwaysApply: false
+---
+
+# Data Model
+
+**Diagram:** `.cursor/rules/diagrams.mdc` – "Data model" ER diagram.
+
+## Core Tables (NeonDB)
+
+- **tests**: id, user_id (MVP hardcoded), name, url, definition (JSONB), auto_handle_popups, created_at, updated_at.
+- **test_runs**: id, test_id, status (queued|running|passed|failed), started_at, completed_at, duration_ms, screenshots (JSONB), logs (JSONB), step_results (JSONB), self_healed, llm_calls, cost_usd, error, error_step, created_at.
+- **session_memory**: instruction_hash (unique), page_url, instruction, action_data (JSONB), reliability_score, success_count, failure_count, last_used, created_at.
+
+## definition (tests)
+
+```json
+{
+  "steps": [
+    {
+      "action": "navigate" | "click" | "fill" | "verify",
+      "instruction": "string",
+      "advanced_selector?": "string",
+      "target?: "string",
+      "value?: "string",
+      "expected?: "string"
+    }
+  ]
+}
+```
+
+## step_results (test_runs)
+
+Each item: `step`, `status` (passed|failed|skipped), `strategy` (selector|dom|vision), `self_healed`, `duration_ms`, `attempts`, `error?`.
+
+## Screenshots & Retention
+
+Screenshots array: `{ step, data_url, timestamp, compressed? }`. Keep screenshots only for the **last 20 runs per test**; older runs keep logs/metrics/step_results but clear or null screenshots.
+
+## Indexes
+
+Use indexes on test_id, user_id, status, created_at (DESC), instruction_hash, last_used. Add GIN on JSONB only if query performance demands it.

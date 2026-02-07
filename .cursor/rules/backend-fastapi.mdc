@@ -1,0 +1,34 @@
+---
+description: FastAPI backend, routes, Redis, and worker
+globs: backend/**/*
+alwaysApply: false
+---
+
+# Backend (FastAPI)
+
+**Flows:** `.cursor/rules/diagrams.mdc` (deployment, execution sequence, self-healing). Use `.cursor/skills/fastapi-templates` for FastAPI structure and error handling.
+
+## API Routes
+
+- `POST /tests` – create; `GET /tests` – list; `GET /tests/{id}`, `PUT /tests/{id}`, `DELETE /tests/{id}`.
+- `POST /test/run` – create test_run (status=queued), enqueue job to Redis Stream `runs:queue`, return run_id. Redirect client to `/results/{run_id}`.
+- `GET /results/{id}` – get test run (for polling or initial load).
+- `GET /results/{id}/stream` – SSE: read from Redis Stream `run_events:{run_id}`, support resume via Last-Event-ID. CORS enabled for this route.
+
+## Execution Flow
+
+1. API creates `test_runs` row (queued), XADD to `runs:queue`.
+2. Worker (separate process) consumes via consumer group; loads test definition, runs agent.
+3. Agent appends events to `run_events:{run_id}` (log, screenshot, complete, error). SSE endpoint XREAD from that stream and streams to client.
+4. On completion, worker updates `test_runs` (status, screenshots, logs, step_results, metrics).
+
+## DB & Redis
+
+- NeonDB: `asyncpg` connection pool. No ORM; use raw SQL or parameterized queries.
+- Redis: Upstash. Streams for `runs:queue` (jobs) and `run_events:{run_id}` (durable events). Use consumer groups for queue consumption.
+
+## Conventions
+
+- Pydantic for request/response and config. `app/config.py` for env; `app/database.py` for pool; `app/redis_client.py` for Redis.
+- Errors: return consistent JSON; map to appropriate HTTP status. Playwright/LLM failures: retry (e.g. 3x per step), then record failure and continue or mark run failed.
+- Timeouts: e.g. 60s per step, 5min total test. Browser cleanup after each run to avoid leaks.

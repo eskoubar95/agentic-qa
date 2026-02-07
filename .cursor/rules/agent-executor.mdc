@@ -1,0 +1,33 @@
+---
+description: Agent executor, self-healing fallback chain, and strategies
+globs: backend/**/agent/**
+alwaysApply: false
+---
+
+# Agent Executor
+
+**Flow:** `.cursor/rules/diagrams.mdc` – "Self-healing (per step)" and "Execution" sequence.
+
+## Fallback Chain (per step)
+
+1. **Advanced selector** (if provided): Playwright selector. Success → execute, mark strategy `selector`. Fail → continue.
+2. **DOM**: Playwright locators `get_by_text`, `get_by_role`, `get_by_label` from instruction. Success → mark `dom`. Fail → continue.
+3. **Vision**: Screenshot → OpenRouter (Claude 3.5 Sonnet) with instruction → parse coordinates → click/fill at coordinates. Mark `vision` and `self_healed: true`.
+
+Record in step_results: `strategy`, `self_healed`, `duration_ms`, `attempts`, `error` if any.
+
+## Session Memory
+
+- Key: SHA256 of `{page_url}::{instruction.lower()}`.
+- Value: `action_data` (selector, strategy, coordinates, confidence). Track `reliability_score`, `success_count`, `failure_count`.
+- Use cache only if `reliability_score > 0.8`. TTL e.g. 1 hour. On success: update cache; on failure: penalize reliability.
+
+## Popup Handling
+
+- Playwright dialog handlers for native dialogs.
+- Best-effort patterns for common cookie/consent banners (e.g. after navigation, before main step). Log every dismissal to run event stream (type log, message describing action).
+- Do not attempt captcha; detect and fail with a clear message.
+
+## Events
+
+Append to Redis Stream `run_events:{run_id}` for every meaningful event: start, step progress, screenshot (base64), self-heal notice, complete, error. Message shape: `{ type, timestamp, data }` (log | screenshot | complete | error).

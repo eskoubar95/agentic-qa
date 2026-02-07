@@ -1,0 +1,96 @@
+# Workflow: Plan → Build → PR
+
+Correct order so branch, commits, and PR stay consistent. Commands live in subfolders: `git/`, `test/`, `code/`; root: `create-plan.md`, `docs.md`.
+
+---
+
+## 1. Plan
+
+- Run `/create-plan` (with context or ticket).
+- Plan is created in Cursor plan mode.
+- Review and adjust the plan until it’s clear.
+
+---
+
+## 2. Branch (before any build/work)
+
+- Run `/git/create-branch`.
+- Choose: one phase/task or whole plan → get a branch name like `feature/session-memory`.
+- Create branch: `git checkout -b feature/session-memory`.
+- **All following work happens on this branch.**
+
+---
+
+## 3. Build / Develop
+
+- In Cursor: run **Build** on the plan (or implement phases manually).
+- Do the implementation on the branch from step 2.
+- **Support commands** (use as needed during build):
+  - **`/test/lint`** – run lint/format/typecheck, auto-fix what’s possible, list the rest.
+  - **`/test/test`** – run the test suite, report pass/fail, suggest or apply fixes for failures.
+  - **`/test/write-tests`** – generate unit tests for a file or feature (when you’ve added new code and want tests).
+  - **`/docs`** – from branch changes: update existing READMEs, add READMEs where missing, or remove outdated docs (one command; add/change/delete inferred).
+
+---
+
+## 3b. Before commit: cleanup and optional self-review
+
+- Run **`/git/cleanup-branch`** to remove debug code (e.g. `console.log`, `debugger`), tidy commented blocks and unlinked TODOs, and get suggestions for commit structure.
+- Optional: run **`/code/code-review`** to self-review your branch changes against project standards (quality, safety, tests, docs) and get a short report and suggestions before opening the PR. Then commit.
+
+---
+
+## 4. Commit
+
+- Run `/git/commit-git` when you have a logical chunk of work.
+- Commit **on the same branch**; make as many commits as you need.
+- Message format: `type(scope): summary` (e.g. `feat(tests): add session memory lookup`).
+
+---
+
+## 5. Push
+
+- When the work is ready for review (or you want it backed up): run `/git/git-push` (fetch + optional rebase, then push).
+- Or manually: `git push -u origin <branch-name>` (first time); later just `git push`.
+
+---
+
+## 6. Open PR
+
+- **After** the branch is pushed: run **`/git/create-pr`** once. It will:
+  1. Check that the branch is pushed.
+  2. **Size-analyze** the diff vs `main` (or your base). If too large, it suggests how to split and does **not** create a PR; you split, push the first part, and run `/git/create-pr` again for that branch.
+  3. If size is OK: **generate** title and description from the template, then **create** the PR (via `gh` or output for paste).
+- You can keep pushing more commits to the same branch; they’ll appear in the PR.
+
+---
+
+## 7. Address feedback (after CodeRabbit / CI / reviewers)
+
+- Run **`/git/address-pr-feedback`** to fetch open review comments (via `gh` or paste), go through them file by file, and get suggested code changes. Apply fixes, then commit and push; resolve each conversation on GitHub when done.
+
+---
+
+## 8. Squash and merge (when ready)
+
+- When comments are resolved and CI is green: run **`/git/merge-pr`** to check status (mergeable, checks) and then squash-and-merge the PR (via `gh pr merge --squash` or instructions for the GitHub UI). Afterwards: `git checkout main && git pull`.
+
+---
+
+## Summary order
+
+| Step | Action | Command / action |
+|------|--------|-------------------|
+| 1 | Plan | `/create-plan` → plan in Cursor |
+| 2 | Branch | `/git/create-branch` → `git checkout -b …` |
+| 3 | Build | Cursor **Build**; support: `/test/lint`, `/test/test`, `/test/write-tests`, `/docs` |
+| 3b | Cleanup | `/git/cleanup-branch`; optional: `/code/code-review` |
+| 4 | Commit | `/git/commit-git` (on branch) |
+| 5 | Push | `/git/git-push` or `git push -u origin <branch>` |
+| 6 | PR | `/git/create-pr` (analyze → describe → create, or suggest split) |
+| 7 | Feedback | `/git/address-pr-feedback` (work through review comments, then push and resolve) |
+| 8 | Merge | `/git/merge-pr` (squash and merge when CI is green) |
+
+**Rule of thumb:** Branch first → build (use `/test/lint`, `/test/test`, `/test/write-tests`, `/docs` as needed) → `/git/cleanup-branch` (optional `/code/code-review`) → commit → push and `/git/create-pr` → address feedback → `/git/merge-pr`.
+
+**On demand (not in table):** `/code/refactor` – improve code structure of a file or area without changing behavior; use when you ask to refactor something.

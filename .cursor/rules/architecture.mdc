@@ -1,0 +1,37 @@
+---
+description: Agentic QA architecture, stack, and key technical decisions
+alwaysApply: true
+---
+
+# Agentic QA – Architecture
+
+**Flow overview:** See `.cursor/rules/diagrams.mdc` for Mermaid diagrams (deployment, user journey, execution sequence, data model, self-healing flow).
+
+**Project skills:** When implementing patterns, prefer the skills in `.cursor/skills/`: `nextjs-app-router-patterns` (Next.js 14+ App Router, Server Components, streaming), `fastapi-templates` (FastAPI async, DI, error handling), `python-performance-optimization` (profiling, bottlenecks). Use them for concrete implementation guidance.
+
+## Product
+
+AI-powered testing: natural-language tests, self-healing execution (selector → DOM → LLM vision), real-time results. MVP: create/run/view/edit/delete tests, optional advanced selectors for demo, best-effort popup handling. No auth, no teams, no scheduled runs.
+
+## Monorepo & Stack
+
+- **Frontend**: Next.js 15.5, React 19, TypeScript 5.7+, Tailwind 3.4+
+- **Backend**: FastAPI 0.128+, Python 3.12, Pydantic 2.10+
+- **Browser automation**: Playwright 1.50+
+- **Database**: NeonDB (Postgres). Reads: Next.js Server Components via `@neondatabase/serverless`. Writes: FastAPI via `asyncpg`.
+- **Queue & events**: Upstash Redis (Streams for job queue + durable run events).
+- **LLM**: OpenRouter (Claude 3.5 Sonnet).
+- **Deploy**: Railway (frontend + backend).
+
+## Key Decisions
+
+1. **Execution**: Redis-backed queue + separate worker (not BackgroundTasks). Enqueue from FastAPI; worker consumes and runs agent. Enables horizontal scale and recovery.
+2. **Real-time**: Redis Streams for run events; FastAPI SSE reads stream and streams to browser. Durable, resumable via Last-Event-ID.
+3. **REST**: Next.js API routes proxy to FastAPI. Frontend calls `/api/*` only; FastAPI URL not exposed for REST. SSE connects directly to FastAPI (CORS only for SSE).
+4. **Self-healing**: For each step: (1) advanced selector if provided, (2) DOM (text/role/label), (3) LLM vision. Record strategy and self-healed flag in step results.
+5. **Session memory**: Cache by hash of `url::instruction`; store selector/strategy/coordinates; reliability score + TTL; use only if reliability > threshold.
+6. **Popups**: Playwright dialogs + best-effort consent/cookie patterns; log any dismissal to run events. No captcha handling.
+
+## Constraints (MVP)
+
+No authentication (hardcoded user). No team features. No scheduled runs. Local demo acceptable. Reliability over cost (use LLM liberally). Keep screenshots for last 20 runs per test; older runs drop screenshots.
