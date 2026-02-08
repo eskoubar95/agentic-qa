@@ -57,40 +57,40 @@ async def recover_stuck_runs() -> None:
     from app.database import get_connection
     from app.redis_client import append_run_event
 
+    timeout_min = int(os.getenv("STUCK_RUN_TIMEOUT_MINUTES", "10"))
+    interval_sec = timeout_min * 60
     async with get_connection() as conn:
         rows = await conn.fetch(
             """
             SELECT id FROM test_runs
             WHERE status = 'running'
-              AND started_at < NOW() - INTERVAL '1 minute' * $1
+              AND started_at < NOW() - ($1::text || ' seconds')::interval
             """,
-            STUCK_RUN_TIMEOUT_MINUTES,
+            interval_sec,
         )
-    for row in rows:
-        run_id = str(row["id"])
-        try:
-            async with get_connection() as conn:
-                await conn.execute(
-                    """
-                    UPDATE test_runs
-                    SET status = 'failed', error = $1, completed_at = NOW()
-                    WHERE id = $2
-                    """,
-                    "Stuck - timeout",
-                    row["id"],
-                )
-            await append_run_event(run_id, "error", {"message": "Stuck - timeout"})
-            logger.warning("Recovered stuck run run_id=%s", run_id)
-        except Exception as e:
-            logger.exception("Failed to recover stuck run run_id=%s: %s", run_id, e)
+        for row in rows:
+            await conn.execute(
+                """
+                UPDATE test_runs
+                SET status = 'failed', error = 'Stuck - timeout', completed_at = NOW()
+                WHERE id = $1
+                """,
+                row["id"],
+            )
+            await append_run_event(
+                str(row["id"]),
+                "error",
+                {"message": "Stuck run recovered - timeout"},
+            )
+            logger.warning("Recovered stuck run run_id=%s", row["id"])
 
 
-async def recover_stuck_runs_periodically(interval: int = 300) -> None:
-    """Loop: call recover_stuck_runs() then sleep(interval) until shutdown."""
+async def recover_stuck_runs_periodically(interval_sec: int = 300) -> None:
+    """Loop: call recover_stuck_runs() then sleep(interval_sec) until shutdown."""
     try:
         while shutdown_event is not None and not shutdown_event.is_set():
             await recover_stuck_runs()
-            await asyncio.sleep(interval)
+            await asyncio.sleep(interval_sec)
     except asyncio.CancelledError:
         pass
 
