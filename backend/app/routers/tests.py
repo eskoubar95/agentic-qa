@@ -22,6 +22,7 @@ def _ensure_dict(val):
         return json.loads(val) if val else {}
     return {}
 
+
 # MVP: hardcoded user
 DEMO_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 

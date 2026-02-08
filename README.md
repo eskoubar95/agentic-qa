@@ -6,7 +6,7 @@ Epic Brief: `spec:f7074a65-1009-4074-80e5-6cfa35a2908f/5ab786c7-4a77-454f-8235-b
 ## Tech stack
 
 - **Frontend:** Next.js 15.5, React 19, TypeScript 5.7+, Tailwind CSS 3.4+
-- **Backend:** FastAPI 0.128+, Python 3.12, Pydantic 2.10+
+- **Backend:** FastAPI 0.128+, Python 3.12, Pydantic 2.10+, Playwright 1.50
 - **Deployment:** Railway
 
 ## Prerequisites
@@ -50,8 +50,15 @@ Runs at [http://localhost:8000](http://localhost:8000). API docs at [http://loca
 
 ```
 agentic-qa/
-├── frontend/     Next.js app (App Router, Tailwind)
-├── backend/      FastAPI app (uvicorn)
+├── frontend/        Next.js app (App Router, Tailwind)
+├── backend/
+│   ├── app/
+│   │   ├── agent/       Playwright-based test executor (navigate, click, fill, verify)
+│   │   └── routers/     Tests CRUD, run, results, SSE stream
+│   └── scripts/
+│       ├── run_worker.py    Queue consumer; runs AgentExecutor
+│       ├── test_api.py      API validation tests
+│       └── test_flow.py     End-to-end flow test
 └── README.md
 ```
 
@@ -94,13 +101,22 @@ Environment variables are documented in `frontend/.env.example` and `backend/.en
 
 ```bash
 cd backend
+# After pip install -r requirements.txt, install browser once:
+python -m playwright install chromium
 python scripts/run_worker.py
 ```
+
+The worker consumes jobs from the Redis queue, runs tests via Playwright, and emits events for the SSE stream.
 
 ## Linting
 
 - **Frontend:** From `frontend/`, run `npm run lint` (ESLint 8 with `eslint-config-next`).
-- **Backend:** No lint config in MVP.
+- **Backend:** Ruff for lint and format. From `backend/`:
+  ```bash
+  python -m ruff check . --fix
+  python -m ruff format .
+  # Or: make lint-fix
+  ```
 
 ## Testing
 
@@ -108,12 +124,20 @@ python scripts/run_worker.py
 
 ```bash
 cd backend
-# With venv activated:
 pip install -r requirements-dev.txt
-python -m pytest tests/ -v
+python -m pytest tests/ scripts/test_api.py -v
 ```
 
-Tests live in `backend/tests/` (e.g. `test_main.py` for the health endpoint).
+- Unit/integration tests: `backend/tests/` (e.g. `test_agent.py`, `test_main.py`)
+- API validation: `backend/scripts/test_api.py` (requires `DATABASE_URL`, `REDIS_URL` for full run)
+- Some tests skip when env vars are missing. On Windows, one SSE test skips due to event-loop compatibility.
+
+**End-to-end flow test:**
+
+```bash
+# With backend and worker running:
+python backend/scripts/test_flow.py
+```
 
 ## Deployment (Railway)
 
@@ -123,3 +147,5 @@ Railway auto-detects the frontend from `frontend/package.json` and the backend f
 
 - **T2:** ✅ Database schema and NeonDB connections
 - **T3:** ✅ Redis Streams setup, run queue, worker, SSE
+- **T4:** ✅ FastAPI REST endpoints validation
+- **T5:** ✅ Agent Executor with Playwright (navigate, click, fill, verify)

@@ -49,9 +49,7 @@ async def test_tests_crud(db_pool):
     assert row["name"] == "Test CRUD"
 
     async with get_connection() as conn:
-        await conn.execute(
-            "UPDATE tests SET name = $1 WHERE id = $2", "Updated Name", test_id
-        )
+        await conn.execute("UPDATE tests SET name = $1 WHERE id = $2", "Updated Name", test_id)
     async with get_connection() as conn:
         row = await conn.fetchrow("SELECT name FROM tests WHERE id = $1", test_id)
     assert row["name"] == "Updated Name"
@@ -97,9 +95,7 @@ async def test_test_runs_crud(db_pool):
     run_id = run_row["id"]
 
     async with get_connection() as conn:
-        await conn.execute(
-            "UPDATE test_runs SET status = $1 WHERE id = $2", "failed", run_id
-        )
+        await conn.execute("UPDATE test_runs SET status = $1 WHERE id = $2", "failed", run_id)
     async with get_connection() as conn:
         row = await conn.fetchrow("SELECT status FROM test_runs WHERE id = $1", run_id)
     assert row["status"] == "failed"
@@ -150,7 +146,9 @@ async def test_session_memory_crud(db_pool):
             mem_id,
         )
     async with get_connection() as conn:
-        row = await conn.fetchrow("SELECT reliability_score FROM session_memory WHERE id = $1", mem_id)
+        row = await conn.fetchrow(
+            "SELECT reliability_score FROM session_memory WHERE id = $1", mem_id
+        )
     assert row["reliability_score"] == 0.8
 
     async with get_connection() as conn:
@@ -186,8 +184,6 @@ async def test_jsonb_operations(db_pool):
     assert row["definition"]["steps"][1]["target"] == "email"
 
     async with get_connection() as conn:
-        test_row = await conn.fetchrow(
-            "SELECT id FROM tests WHERE user_id = $1", user_id
-        )
+        test_row = await conn.fetchrow("SELECT id FROM tests WHERE user_id = $1", user_id)
         test_id = test_row["id"]
         await conn.execute("DELETE FROM tests WHERE id = $1", test_id)

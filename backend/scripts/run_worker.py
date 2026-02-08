@@ -2,6 +2,7 @@
 """Run worker: consumes jobs from runs:queue, executes tests, emits events."""
 
 import asyncio
+import json
 import os
 import sys
 import uuid
@@ -16,12 +17,10 @@ load_dotenv()
 
 
 async def process_job(run_id: str, test_id: str) -> None:
-    """Process one run job. Stub: emit start + complete. Full agent in later ticket."""
+    """Process one run job: fetch test, run AgentExecutor with Playwright."""
+    from app.agent.executor import AgentExecutor
     from app.database import get_connection
     from app.redis_client import append_run_event
-
-    await append_run_event(run_id, "log", {"message": "Worker started run"})
-    await append_run_event(run_id, "log", {"message": "Loading test definition..."})
 
     async with get_connection() as conn:
         test_row = await conn.fetchrow(
@@ -42,28 +41,22 @@ async def process_job(run_id: str, test_id: str) -> None:
             )
         return
 
-    await append_run_event(
-        run_id,
-        "log",
-        {"message": f"Running test: {test_row['name']} at {test_row['url']}"},
-    )
+    definition = test_row["definition"]
+    if isinstance(definition, str):
+        try:
+            definition = json.loads(definition) if definition else {}
+        except json.JSONDecodeError:
+            definition = {}
+    elif definition is None:
+        definition = {}
 
-    # Stub: no Playwright execution yet. Emit complete.
-    await append_run_event(
-        run_id,
-        "complete",
-        {"status": "passed", "duration_ms": 0, "message": "Stub run (no Playwright yet)"},
+    executor = AgentExecutor(
+        run_id=run_id,
+        test_definition=definition,
+        test_url=test_row["url"] or "",
+        test_name=test_row["name"] or "Test",
     )
-
-    async with get_connection() as conn:
-        await conn.execute(
-            """
-            UPDATE test_runs
-            SET status = 'passed', duration_ms = 0
-            WHERE id = $1
-            """,
-            uuid.UUID(run_id),
-        )
+    await executor.execute_test()
 
 
 async def main() -> None:

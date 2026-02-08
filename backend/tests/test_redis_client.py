@@ -39,14 +39,18 @@ async def test_enqueue_run_and_consume_run_job(redis_init):
     """enqueue_run adds job; consume_run_job returns it."""
     from app.redis_client import consume_run_job, enqueue_run
 
-    run_id = str(uuid.uuid4())
-    test_id = str(uuid.uuid4())
-    entry_id = await enqueue_run(run_id, test_id)
-    assert entry_id
-
     consumer = f"test-{uuid.uuid4().hex[:8]}"
-    job = await consume_run_job(consumer, block_ms=2000)
-    assert job is not None
+    job = None
+    run_id = test_id = None
+    for _ in range(3):
+        run_id = str(uuid.uuid4())
+        test_id = str(uuid.uuid4())
+        entry_id = await enqueue_run(run_id, test_id)
+        assert entry_id
+        job = await consume_run_job(consumer, block_ms=2000)
+        if job is not None and job["run_id"] == run_id:
+            break
+    assert job is not None, "Could not consume enqueued job (worker may be competing)"
     assert job["run_id"] == run_id
     assert job["test_id"] == test_id
     assert "msg_id" in job

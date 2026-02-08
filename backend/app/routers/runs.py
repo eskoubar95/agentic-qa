@@ -10,15 +10,28 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.database import get_connection
 from app.redis_client import (
-    append_run_event,
     enqueue_run,
-    init_redis,
     is_redis_available,
     read_run_events,
 )
 from app.schemas import RunTestRequest, RunTestResponse, TestRunResponse
 
 router = APIRouter(tags=["runs"])
+
+
+def _ensure_list(val):
+    """Convert JSONB value (list | str) to list."""
+    if val is None:
+        return []
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str):
+        try:
+            parsed = json.loads(val)
+            return parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            return []
+    return []
 
 
 def _row_to_test_run_response(row) -> TestRunResponse:
@@ -30,9 +43,9 @@ def _row_to_test_run_response(row) -> TestRunResponse:
         started_at=row["started_at"].isoformat() if row["started_at"] else None,
         completed_at=row["completed_at"].isoformat() if row["completed_at"] else None,
         duration_ms=row["duration_ms"],
-        screenshots=row["screenshots"],
-        logs=row["logs"],
-        step_results=row["step_results"] or [],
+        screenshots=_ensure_list(row["screenshots"]),
+        logs=_ensure_list(row["logs"]) if row["logs"] is not None else None,
+        step_results=_ensure_list(row["step_results"]) or [],
         self_healed=row["self_healed"] or False,
         llm_calls=row["llm_calls"] or 0,
         cost_usd=float(row["cost_usd"] or 0),

@@ -75,8 +75,8 @@ class TestRunResponse(BaseModel):
     started_at: str | None
     completed_at: str | None
     duration_ms: int | None
-    screenshots: dict | None
-    logs: dict | None
+    screenshots: list | None
+    logs: list | None
     step_results: list | None
     self_healed: bool
     llm_calls: int

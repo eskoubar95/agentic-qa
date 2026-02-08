@@ -1,5 +1,5 @@
 """Unit tests for FastAPI app (health endpoint)."""
-import pytest
+
 from fastapi.testclient import TestClient
 
 from app.main import app

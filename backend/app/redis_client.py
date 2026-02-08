@@ -27,11 +27,11 @@ def init_redis() -> None:
     url = get_settings().REDIS_URL
     if not url:
         return
-    from redis.asyncio import Redis
-
     # Railway Redis proxy: disable cert verification to avoid SSL handshake timeout
     # (proxy uses cert that may not validate from local/hosted clients)
     from urllib.parse import urlparse, urlunparse
+
+    from redis.asyncio import Redis
 
     parsed = urlparse(url)
     if parsed.scheme == "rediss":
