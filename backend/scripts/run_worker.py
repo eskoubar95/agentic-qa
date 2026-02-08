@@ -96,15 +96,22 @@ async def recover_stuck_runs() -> None:
 
 def _is_transient_error(exc: BaseException) -> bool:
     """Return True if the exception is a transient DB/Redis connection error."""
-    name = type(exc).__name__
-    mod = type(exc).__module__
-    if "Connection" in name or "Timeout" in name or "Network" in name:
-        return True
-    if "asyncpg" in mod:
-        return "Connection" in name or "Timeout" in name
-    if "redis" in mod:
-        return "Connection" in name or "Timeout" in name
-    return False
+    try:
+        import asyncpg
+        from redis import exceptions as redis_exc
+    except ImportError:
+        return False
+    return isinstance(
+        exc,
+        (
+            asyncpg.InterfaceError,
+            asyncpg.ConnectionDoesNotExistError,
+            asyncpg.ConnectionFailureError,
+            OSError,
+            redis_exc.ConnectionError,
+            redis_exc.TimeoutError,
+        ),
+    )
 
 
 async def process_job(run_id: str, test_id: str) -> None:
@@ -332,8 +339,14 @@ async def main() -> None:
         except asyncio.CancelledError:
             pass
         logger.info("Shutting down: closing database and Redis connections")
-        await close_db()
-        await close_redis()
+        try:
+            await close_db()
+        except Exception:
+            logger.exception("Error closing database")
+        try:
+            await close_redis()
+        except Exception:
+            logger.exception("Error closing Redis")
         logger.info("Worker stopped")
     sys.exit(0)
 
