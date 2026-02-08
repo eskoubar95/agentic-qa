@@ -30,13 +30,13 @@ def _validate_step(step: dict, idx: int) -> str | None:
     if action == "navigate":
         pass  # target optional - executor uses test_url if empty
     elif action == "click":
-        sel = step.get("advanced_selector")
-        if not sel or not str(sel).strip():
-            return f"Step {idx + 1}: click requires 'advanced_selector'"
+        instr = step.get("instruction")
+        if not instr or not str(instr).strip():
+            return f"Step {idx + 1}: click requires 'instruction'"
     elif action == "fill":
-        sel = step.get("advanced_selector")
-        if not sel or not str(sel).strip():
-            return f"Step {idx + 1}: fill requires 'advanced_selector'"
+        instr = step.get("instruction")
+        if not instr or not str(instr).strip():
+            return f"Step {idx + 1}: fill requires 'instruction'"
         if "value" not in step:
             return f"Step {idx + 1}: fill requires 'value'"
     elif action == "verify":
@@ -131,10 +131,10 @@ class AgentExecutor:
                         step_result = {
                             "step": i,
                             "status": result["status"],
-                            "strategy": "selector",
-                            "self_healed": False,
+                            "strategy": result.get("strategy", "unknown"),
+                            "self_healed": result.get("self_healed", False),
                             "duration_ms": duration_ms,
-                            "attempts": 1,
+                            "attempts": result.get("attempts", 1),
                             "error": result.get("error"),
                         }
                         step_results.append(step_result)
@@ -253,14 +253,15 @@ class AgentExecutor:
         error_step: int | None,
     ) -> None:
         """Update test_runs with final results."""
+        self_healed = any(sr.get("self_healed", False) for sr in step_results)
         async with get_connection() as conn:
             await conn.execute(
                 """
                 UPDATE test_runs
                 SET status = $1, started_at = $2, completed_at = $3,
                     duration_ms = $4, screenshots = $5::jsonb, step_results = $6::jsonb,
-                    logs = $7::jsonb, error = $8, error_step = $9
-                WHERE id = $10
+                    logs = $7::jsonb, error = $8, error_step = $9, self_healed = $10
+                WHERE id = $11
                 """,
                 status,
                 started_at,
@@ -271,5 +272,6 @@ class AgentExecutor:
                 json.dumps(logs),
                 error,
                 error_step,
+                self_healed,
                 uuid.UUID(self.run_id),
             )

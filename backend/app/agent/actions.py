@@ -3,6 +3,8 @@
 import logging
 from typing import Any
 
+from app.agent.strategies import DOMStrategy, SelectorStrategy, VisionStrategy
+
 logger = logging.getLogger(__name__)
 
 STEP_TIMEOUT_MS = 30_000
@@ -22,30 +24,64 @@ async def execute_navigate(page: Any, step: dict, base_url: str = "") -> dict:
 
 
 async def execute_click(page: Any, step: dict) -> dict:
-    """Execute click action. Requires step['advanced_selector']."""
-    selector = step.get("advanced_selector") or ""
-    if not selector.strip():
-        return {"status": "failed", "error": "click requires 'advanced_selector'"}
-    try:
-        await page.click(selector, timeout=STEP_TIMEOUT_MS)
-        return {"status": "passed"}
-    except Exception as e:
-        logger.exception("Click failed: %s", e)
-        return {"status": "failed", "error": str(e)}
+    """Execute click via fallback: SelectorStrategy -> DOMStrategy -> VisionStrategy."""
+    strategies = [
+        ("selector", SelectorStrategy),
+        ("dom", DOMStrategy),
+        ("vision", VisionStrategy),
+    ]
+    errors = []
+    attempts = 0
+    for strategy_name, strategy_cls in strategies:
+        attempts += 1
+        result = await strategy_cls.try_execute(page, step, "click", "")
+        if result:
+            return {
+                "status": "passed",
+                "strategy": result.get("strategy", strategy_name),
+                "self_healed": result.get("self_healed", False),
+                "attempts": attempts,
+                "error": None,
+            }
+        errors.append(f"{strategy_name}: failed")
+    return {
+        "status": "failed",
+        "strategy": "unknown",
+        "self_healed": False,
+        "attempts": attempts,
+        "error": "All strategies failed: " + "; ".join(errors),
+    }
 
 
 async def execute_fill(page: Any, step: dict) -> dict:
-    """Execute fill action. Requires step['advanced_selector'] and step['value']."""
-    selector = step.get("advanced_selector") or ""
+    """Execute fill via fallback: SelectorStrategy -> DOMStrategy -> VisionStrategy."""
     value = step.get("value", "")
-    if not selector.strip():
-        return {"status": "failed", "error": "fill requires 'advanced_selector'"}
-    try:
-        await page.fill(selector, str(value), timeout=STEP_TIMEOUT_MS)
-        return {"status": "passed"}
-    except Exception as e:
-        logger.exception("Fill failed: %s", e)
-        return {"status": "failed", "error": str(e)}
+    strategies = [
+        ("selector", SelectorStrategy),
+        ("dom", DOMStrategy),
+        ("vision", VisionStrategy),
+    ]
+    errors = []
+    attempts = 0
+    for strategy_name, strategy_cls in strategies:
+        attempts += 1
+        result = await strategy_cls.try_execute(page, step, "fill", value)
+        if result:
+            return {
+                "status": "passed",
+                "strategy": result.get("strategy", strategy_name),
+                "self_healed": result.get("self_healed", False),
+                "attempts": attempts,
+                "error": None,
+            }
+        errors.append(f"{strategy_name}: failed")
+    return {
+        "status": "failed",
+        "strategy": "unknown",
+        "self_healed": False,
+        "attempts": attempts,
+        "error": "All strategies failed: " + "; ".join(errors),
+    }
 
 
 async def execute_verify(page: Any, step: dict) -> dict:
