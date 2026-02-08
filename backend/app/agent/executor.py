@@ -92,8 +92,12 @@ class AgentExecutor:
 
         screenshots: list[dict] = []
         step_results: list[dict] = []
+        logs: list[dict] = []
         failed_step: int | None = None
         final_error: str | None = None
+
+        log_entry = {"message": "Starting test execution", "test_name": self.test_name}
+        logs.append(log_entry)
 
         try:
             async with async_playwright() as p:
@@ -116,14 +120,9 @@ class AgentExecutor:
                         action = step.get("action", "")
                         instruction = step.get("instruction", action)
 
-                        await append_run_event(
-                            self.run_id,
-                            "log",
-                            {
-                                "step": i,
-                                "message": f"Executing {action}: {instruction}",
-                            },
-                        )
+                        log_entry = {"step": i, "message": f"Executing {action}: {instruction}"}
+                        logs.append(log_entry)
+                        await append_run_event(self.run_id, "log", log_entry)
 
                         step_start = time.perf_counter()
                         result = await execute_action(action, page, step, self.test_url)
@@ -140,18 +139,16 @@ class AgentExecutor:
                         }
                         step_results.append(step_result)
 
-                        await append_run_event(
-                            self.run_id,
-                            "log",
-                            {
-                                "step": i,
-                                "message": "Step completed"
-                                if result["status"] == "passed"
-                                else f"Step failed: {result.get('error', '')}",
-                                "duration_ms": duration_ms,
-                                "status": result["status"],
-                            },
-                        )
+                        log_entry = {
+                            "step": i,
+                            "message": "Step completed"
+                            if result["status"] == "passed"
+                            else f"Step failed: {result.get('error', '')}",
+                            "duration_ms": duration_ms,
+                            "status": result["status"],
+                        }
+                        logs.append(log_entry)
+                        await append_run_event(self.run_id, "log", log_entry)
 
                         screenshot_data = await self._capture_screenshot(page, i)
                         if screenshot_data:
@@ -200,6 +197,7 @@ class AgentExecutor:
             duration_ms=total_duration_ms,
             screenshots=screenshots,
             step_results=step_results,
+            logs=logs,
             error=final_error,
             error_step=failed_step,
         )
@@ -234,7 +232,7 @@ class AgentExecutor:
                 """
                 UPDATE test_runs
                 SET status = 'failed', error = $1, error_step = $2,
-                    completed_at = NOW(), duration_ms = 0
+                    completed_at = NOW(), duration_ms = 0, logs = '[]'::jsonb
                 WHERE id = $3
                 """,
                 error,
@@ -250,6 +248,7 @@ class AgentExecutor:
         duration_ms: int,
         screenshots: list,
         step_results: list,
+        logs: list,
         error: str | None,
         error_step: int | None,
     ) -> None:
@@ -260,8 +259,8 @@ class AgentExecutor:
                 UPDATE test_runs
                 SET status = $1, started_at = $2, completed_at = $3,
                     duration_ms = $4, screenshots = $5::jsonb, step_results = $6::jsonb,
-                    error = $7, error_step = $8
-                WHERE id = $9
+                    logs = $7::jsonb, error = $8, error_step = $9
+                WHERE id = $10
                 """,
                 status,
                 started_at,
@@ -269,6 +268,7 @@ class AgentExecutor:
                 duration_ms,
                 json.dumps(screenshots),
                 json.dumps(step_results),
+                json.dumps(logs),
                 error,
                 error_step,
                 uuid.UUID(self.run_id),

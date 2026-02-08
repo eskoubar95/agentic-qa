@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -88,6 +89,7 @@ async def main() -> None:
             run_id = job["run_id"]
             test_id = job["test_id"]
             print(f"Processing run_id={run_id} test_id={test_id}")
+            job_start = time.perf_counter()
             try:
                 await process_job(run_id, test_id)
             except Exception as e:
@@ -97,14 +99,17 @@ async def main() -> None:
                 await append_run_event(run_id, "error", {"message": str(e)})
                 from app.database import get_connection
 
+                duration_ms = int((time.perf_counter() - job_start) * 1000)
                 async with get_connection() as conn:
                     await conn.execute(
                         """
                         UPDATE test_runs
-                        SET status = 'failed', error = $1
-                        WHERE id = $2
+                        SET status = 'failed', error = $1,
+                            completed_at = NOW(), duration_ms = $2
+                        WHERE id = $3
                         """,
                         str(e),
+                        duration_ms,
                         uuid.UUID(run_id),
                     )
         else:
