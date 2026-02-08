@@ -30,8 +30,10 @@ def test_validate_step_unknown_action():
     assert _validate_step({"action": "foo"}, 0) == "Step 1: unknown action 'foo'"
 
 
-def test_validate_step_click_missing_instruction():
-    assert "instruction" in (_validate_step({"action": "click"}, 0) or "")
+def test_validate_step_click_missing_selector_and_instruction():
+    err = _validate_step({"action": "click"}, 0)
+    assert err is not None
+    assert "advanced_selector" in err and "instruction" in err
 
 
 def test_validate_step_fill_missing_value():
@@ -50,6 +52,10 @@ def test_validate_step_click_valid():
     assert _validate_step({"action": "click", "instruction": "Click submit"}, 0) is None
 
 
+def test_validate_step_click_valid_selector_only():
+    assert _validate_step({"action": "click", "advanced_selector": "#btn"}, 0) is None
+
+
 def test_validate_step_click_valid_with_selector():
     assert (
         _validate_step({"action": "click", "instruction": "Submit", "advanced_selector": "#btn"}, 0)
@@ -59,6 +65,10 @@ def test_validate_step_click_valid_with_selector():
 
 def test_validate_step_fill_valid():
     assert _validate_step({"action": "fill", "instruction": "Email field", "value": "y"}, 0) is None
+
+
+def test_validate_step_fill_valid_selector_only():
+    assert _validate_step({"action": "fill", "advanced_selector": "#email", "value": "y"}, 0) is None
 
 
 def test_validate_step_verify_valid():

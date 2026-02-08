@@ -30,13 +30,15 @@ def _validate_step(step: dict, idx: int) -> str | None:
     if action == "navigate":
         pass  # target optional - executor uses test_url if empty
     elif action == "click":
-        instr = step.get("instruction")
-        if not instr or not str(instr).strip():
-            return f"Step {idx + 1}: click requires 'instruction'"
+        sel = (step.get("advanced_selector") or "").strip()
+        instr = (step.get("instruction") or "").strip()
+        if not sel and not instr:
+            return f"Step {idx + 1}: click requires 'advanced_selector' or 'instruction'"
     elif action == "fill":
-        instr = step.get("instruction")
-        if not instr or not str(instr).strip():
-            return f"Step {idx + 1}: fill requires 'instruction'"
+        sel = (step.get("advanced_selector") or "").strip()
+        instr = (step.get("instruction") or "").strip()
+        if not sel and not instr:
+            return f"Step {idx + 1}: fill requires 'advanced_selector' or 'instruction'"
         if "value" not in step:
             return f"Step {idx + 1}: fill requires 'value'"
     elif action == "verify":
