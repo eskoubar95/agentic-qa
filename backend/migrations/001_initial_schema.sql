@@ -49,8 +49,8 @@ CREATE TABLE IF NOT EXISTS session_memory (
     page_url TEXT NOT NULL,
     instruction TEXT NOT NULL,
     action_data JSONB NOT NULL DEFAULT '{}',
-    reliability_score REAL DEFAULT 0,
-    success_count INTEGER DEFAULT 0,
+    reliability_score REAL DEFAULT 1.0,
+    success_count INTEGER DEFAULT 1,
     failure_count INTEGER DEFAULT 0,
     last_used TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
@@ -66,3 +66,4 @@ CREATE INDEX IF NOT EXISTS idx_tests_user_id ON tests(user_id);
 CREATE INDEX IF NOT EXISTS idx_tests_created_at ON tests(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_session_memory_instruction_hash ON session_memory(instruction_hash);
 CREATE INDEX IF NOT EXISTS idx_session_memory_last_used ON session_memory(last_used DESC);
+CREATE INDEX IF NOT EXISTS idx_session_memory_reliability ON session_memory(reliability_score DESC);
