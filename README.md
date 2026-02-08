@@ -33,9 +33,9 @@ Runs at [http://localhost:3000](http://localhost:3000).
 
 ```bash
 cd backend
-python -m venv venv
-# Windows: venv\Scripts\activate
-# macOS/Linux: source venv/bin/activate
+python -m venv .venv
+# Windows: .venv\Scripts\Activate.ps1
+# macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your configuration
@@ -56,6 +56,46 @@ agentic-qa/
 ```
 
 Environment variables are documented in `frontend/.env.example` and `backend/.env.example`.
+
+### Database (NeonDB)
+
+1. Create a Neon project at [neon.tech](https://neon.tech) or use the Neon CLI.
+2. Copy the connection string (format: `postgresql://user:pass@host/db?sslmode=require`).
+3. Add to `backend/.env` and `frontend/.env.local`:
+   ```
+   DATABASE_URL=your_neon_connection_string
+   ```
+4. Run migrations:
+   ```bash
+   cd backend
+   python scripts/run_migrations.py
+   ```
+
+### Redis
+
+**Local development (recommended if Railway Redis times out from your network):**
+
+1. Start Redis in Docker:
+   ```bash
+   docker run -d -p 6379:6379 --name agentic-qa-redis redis
+   ```
+2. In `backend/.env`:
+   ```
+   REDIS_URL=redis://localhost:6379
+   ```
+
+**Railway Redis (for production or when reachable):**
+
+1. Add a Redis service in your Railway project.
+2. Copy `REDIS_URL` to `backend/.env` for local dev, or it auto-injects in production.
+3. If you get connection/SSL timeouts, use local Redis above instead.
+
+**Worker (run execution + live streaming):**
+
+```bash
+cd backend
+python scripts/run_worker.py
+```
 
 ## Linting
 
@@ -81,5 +121,5 @@ Railway auto-detects the frontend from `frontend/package.json` and the backend f
 
 ## Next steps
 
-- **T2:** Database schema and NeonDB connections
-- **T3:** Redis Streams setup and client
+- **T2:** ✅ Database schema and NeonDB connections
+- **T3:** ✅ Redis Streams setup, run queue, worker, SSE

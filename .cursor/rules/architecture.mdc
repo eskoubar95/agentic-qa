@@ -19,7 +19,7 @@ AI-powered testing: natural-language tests, self-healing execution (selector →
 - **Backend**: FastAPI 0.128+, Python 3.12, Pydantic 2.10+
 - **Browser automation**: Playwright 1.50+
 - **Database**: NeonDB (Postgres). Reads: Next.js Server Components via `@neondatabase/serverless`. Writes: FastAPI via `asyncpg`.
-- **Queue & events**: Upstash Redis (Streams for job queue + durable run events).
+- **Queue & events**: Railway Redis (Streams for job queue + durable run events).
 - **LLM**: OpenRouter (Claude 3.5 Sonnet).
 - **Deploy**: Railway (frontend + backend).
 

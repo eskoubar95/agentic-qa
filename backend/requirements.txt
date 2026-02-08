@@ -8,3 +8,12 @@ pydantic-settings==2.7.0
 
 # Environment
 python-dotenv==1.0.1
+
+# Database
+asyncpg>=0.31.0
+
+# Redis (Railway / standard)
+redis>=5.0.0
+
+# SSE
+sse-starlette==2.1.3

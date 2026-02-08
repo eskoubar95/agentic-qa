@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     API_V1_STR: str = "/api/v1"
     CORS_ORIGINS: str = "http://localhost:3000"
+    DATABASE_URL: str = ""
+    REDIS_URL: str = ""
 
 
 @lru_cache()

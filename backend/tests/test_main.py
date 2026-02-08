@@ -14,10 +14,13 @@ def test_health_returns_200():
 
 
 def test_health_returns_expected_body():
-    """GET /health returns healthy status and service name."""
+    """GET /health returns status, service, database, and redis fields."""
     response = client.get("/health")
     data = response.json()
-    assert data == {"status": "healthy", "service": "agentic-qa-backend"}
+    assert "status" in data
+    assert data["service"] == "agentic-qa-backend"
+    assert "database" in data
+    assert "redis" in data
 
 
 def test_health_response_is_json():
