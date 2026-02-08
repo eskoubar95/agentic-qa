@@ -36,8 +36,8 @@ async def test_ensure_consumer_group_idempotence(redis_init):
 
 @pytest.mark.asyncio
 async def test_enqueue_run_and_consume_run_job(redis_init):
-    """enqueue_run adds job; consume_run_job returns it."""
-    from app.redis_client import consume_run_job, enqueue_run
+    """enqueue_run adds job; consume_run_job returns it (caller must ack after success)."""
+    from app.redis_client import ack_run_job, consume_run_job, enqueue_run
 
     consumer = f"test-{uuid.uuid4().hex[:8]}"
     job = None
@@ -54,6 +54,98 @@ async def test_enqueue_run_and_consume_run_job(redis_init):
     assert job["run_id"] == run_id
     assert job["test_id"] == test_id
     assert "msg_id" in job
+    await ack_run_job(job["msg_id"])
+
+
+@pytest.mark.asyncio
+async def test_consume_does_not_ack_crash_before_ack(redis_init):
+    """Consume returns job without acking; message stays pending until ack_run_job (prevents job loss on crash)."""
+    from app.redis_client import (
+        CONSUMER_GROUP,
+        RUNS_QUEUE,
+        ack_run_job,
+        consume_run_job,
+        enqueue_run,
+        redis_client,
+    )
+
+    consumer = f"test-crash-{uuid.uuid4().hex[:8]}"
+    run_id = str(uuid.uuid4())
+    test_id = str(uuid.uuid4())
+    await enqueue_run(run_id, test_id)
+    job = await consume_run_job(consumer, block_ms=2000)
+    assert job is not None
+    assert job["run_id"] == run_id
+    assert job["msg_id"]
+
+    # Without ack, message is pending for this consumer (XREADGROUP with "0" returns pending)
+    pending = await redis_client.xreadgroup(
+        groupname=CONSUMER_GROUP,
+        consumername=consumer,
+        streams={RUNS_QUEUE: "0"},
+        count=10,
+    )
+    assert pending and len(pending[0][1]) == 1, "Message should be pending before ack (crash-before-ack)"
+
+    await ack_run_job(job["msg_id"])
+
+    # After ack, no pending messages
+    pending_after = await redis_client.xreadgroup(
+        groupname=CONSUMER_GROUP,
+        consumername=consumer,
+        streams={RUNS_QUEUE: "0"},
+        count=10,
+    )
+    assert not pending_after or len(pending_after[0][1]) == 0
+
+
+@pytest.mark.asyncio
+async def test_crash_mid_job_redelivery(redis_init):
+    """Simulate crash mid-job: consume, do not ack; same consumer can read pending (redelivery)."""
+    from app.redis_client import (
+        CONSUMER_GROUP,
+        RUNS_QUEUE,
+        consume_run_job,
+        enqueue_run,
+        redis_client,
+    )
+
+    consumer = f"test-redelivery-{uuid.uuid4().hex[:8]}"
+    run_id = str(uuid.uuid4())
+    test_id = str(uuid.uuid4())
+    await enqueue_run(run_id, test_id)
+    job1 = await consume_run_job(consumer, block_ms=2000)
+    assert job1 is not None and job1["run_id"] == run_id
+    # Simulate crash: no ack
+
+    # Redelivery: same consumer reads pending (e.g. after restart)
+    pending = await redis_client.xreadgroup(
+        groupname=CONSUMER_GROUP,
+        consumername=consumer,
+        streams={RUNS_QUEUE: "0"},
+        count=10,
+    )
+    assert pending and len(pending[0][1]) == 1
+    msg_id_redelivered, fields = pending[0][1][0]
+    assert fields.get("run_id") == run_id and fields.get("test_id") == test_id
+    assert msg_id_redelivered == job1["msg_id"]
+
+
+@pytest.mark.asyncio
+async def test_ack_run_job_after_success(redis_init):
+    """ack_run_job(msg_id) removes message from pending; double ack does not raise."""
+    from app.redis_client import ack_run_job, consume_run_job, enqueue_run
+
+    consumer = f"test-ack-{uuid.uuid4().hex[:8]}"
+    run_id = str(uuid.uuid4())
+    test_id = str(uuid.uuid4())
+    await enqueue_run(run_id, test_id)
+    job = await consume_run_job(consumer, block_ms=2000)
+    assert job is not None and job["msg_id"]
+
+    await ack_run_job(job["msg_id"])
+    # Second ack is idempotent (Redis XACK on already acked message is a no-op)
+    await ack_run_job(job["msg_id"])
 
 
 @pytest.mark.asyncio

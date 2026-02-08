@@ -19,8 +19,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Graceful shutdown flag (set by signal handlers)
-shutdown_requested = False
+# Graceful shutdown: set by signal handlers so loop exits cleanly
+shutdown_event: asyncio.Event | None = None
 
 # Worker stats for health monitoring
 jobs_processed = 0
@@ -31,8 +31,8 @@ last_heartbeat_time = 0.0
 last_health_log_time = 0.0
 
 # Config from env (used by recovery and main loop)
-STUCK_RUN_TIMEOUT_MINUTES = int(os.getenv("STUCK_RUN_TIMEOUT_MINUTES", "10"))
-RECOVERY_CHECK_INTERVAL_SECONDS = int(os.getenv("RECOVERY_CHECK_INTERVAL_SECONDS", "60"))
+STUCK_RUN_TIMEOUT_MINUTES = int(os.getenv("STUCK_RUN_TIMEOUT_MINUTES", os.getenv("STUCK_RUN_TIMEOUT_MIN", "10")))
+RECOVERY_CHECK_INTERVAL_SECONDS = int(os.getenv("RECOVERY_CHECK_INTERVAL_SECONDS", "300"))  # 5 min default
 HEARTBEAT_IDLE_SECONDS = 30
 HEALTH_LOG_INTERVAL_SECONDS = 300
 
@@ -45,22 +45,22 @@ logging.basicConfig(
 
 
 def _request_shutdown(signum: int | None, frame: object | None) -> None:
-    """Signal handler: set shutdown flag."""
-    global shutdown_requested
-    shutdown_requested = True
+    """Signal handler: set shutdown event so loop exits cleanly."""
+    if shutdown_event is not None:
+        shutdown_event.set()
     sig_name = "SIGTERM" if signum == signal.SIGTERM else "SIGINT"
     logger.info("Shutdown requested via %s", sig_name)
 
 
-async def recover_stuck_runs() -> None:
-    """Background task: mark runs stuck > timeout as failed and emit error events."""
+async def recover_stuck_runs(delay_seconds: int = RECOVERY_CHECK_INTERVAL_SECONDS) -> None:
+    """Background task: find test_runs stuck in 'running' > timeout, mark failed, emit error event."""
     from app.database import get_connection
     from app.redis_client import append_run_event
 
-    while not shutdown_requested:
+    while shutdown_event is not None and not shutdown_event.is_set():
         try:
-            await asyncio.sleep(RECOVERY_CHECK_INTERVAL_SECONDS)
-            if shutdown_requested:
+            await asyncio.sleep(delay_seconds)
+            if shutdown_event.is_set():
                 break
             async with get_connection() as conn:
                 rows = await conn.fetch(
@@ -159,10 +159,14 @@ async def process_job(run_id: str, test_id: str) -> None:
 
 async def main() -> None:
     """Main worker loop: poll runs:queue and process jobs."""
-    global worker_start_time, last_heartbeat_time, last_health_log_time
+    global shutdown_event, worker_start_time, last_heartbeat_time, last_health_log_time
     global jobs_processed, jobs_failed, total_processing_time_ms
+    shutdown_event = asyncio.Event()
     from app.database import close_db, init_db
     from app.redis_client import (
+        CONSUMER_GROUP,
+        RUNS_QUEUE,
+        _ensure_redis,
         close_redis,
         consume_run_job,
         ensure_consumer_group,
@@ -185,10 +189,10 @@ async def main() -> None:
         f"worker-{hostname}-{os.getpid()}-{uuid.uuid4().hex[:8]}",
     )
 
-    # Register signal handlers (Phase 1)
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, lambda s, f: _request_shutdown(s, f))
     if hasattr(signal, "SIGTERM"):
-        signal.signal(signal.SIGTERM, _request_shutdown)
-    signal.signal(signal.SIGINT, _request_shutdown)
+        signal.signal(signal.SIGTERM, lambda s, f: _request_shutdown(s, f))
 
     # Ensure consumer group (Phase 5) with error handling
     try:
@@ -215,11 +219,11 @@ async def main() -> None:
         RECOVERY_CHECK_INTERVAL_SECONDS,
     )
 
-    # Start stuck run recovery task (Phase 2)
-    recovery_task = asyncio.create_task(recover_stuck_runs())
+    # Start stuck run recovery task (runs every RECOVERY_CHECK_INTERVAL_SECONDS, default 5 min)
+    periodic_recovery = asyncio.create_task(recover_stuck_runs(RECOVERY_CHECK_INTERVAL_SECONDS))
 
     try:
-        while not shutdown_requested:
+        while not shutdown_event.is_set():
             job = await consume_run_job(consumer_name)
             if job:
                 run_id = job["run_id"]
@@ -236,10 +240,12 @@ async def main() -> None:
                         await process_job(run_id, test_id)
                         jobs_processed += 1
                         total_processing_time_ms += (time.perf_counter() - job_start) * 1000
+                        r = _ensure_redis()
+                        await r.xack(RUNS_QUEUE, CONSUMER_GROUP, job["msg_id"])
                         break
                     except Exception as e:
                         last_exc = e
-                        if attempt < 2 and _is_transient_error(e) and not shutdown_requested:
+                        if attempt < 2 and _is_transient_error(e) and not shutdown_event.is_set():
                             delay = 2**attempt
                             logger.warning(
                                 "Transient error run_id=%s attempt=%s: %s; retry in %ss",
@@ -333,9 +339,9 @@ async def main() -> None:
                     last_health_log_time = now
                 await asyncio.sleep(1)
     finally:
-        recovery_task.cancel()
+        periodic_recovery.cancel()
         try:
-            await recovery_task
+            await periodic_recovery
         except asyncio.CancelledError:
             pass
         logger.info("Shutting down: closing database and Redis connections")
