@@ -74,6 +74,7 @@ async def consume_run_job(consumer_name: str, block_ms: int = 5000) -> dict | No
     """
     Consume one job from runs:queue via consumer group.
     Uses blocking XREADGROUP for efficient waiting (no polling).
+    Does NOT ack the message; caller must call ack_run_job(msg_id) after successful processing.
     Returns {"run_id": str, "test_id": str, "msg_id": str} or None if no job.
     """
     r = _ensure_redis()
@@ -90,12 +91,17 @@ async def consume_run_job(consumer_name: str, block_ms: int = 5000) -> dict | No
     if not entries:
         return None
     msg_id, fields = entries[0]
-    await r.xack(RUNS_QUEUE, CONSUMER_GROUP, msg_id)
     return {
         "run_id": fields.get("run_id", ""),
         "test_id": fields.get("test_id", ""),
         "msg_id": msg_id,
     }
+
+
+async def ack_run_job(msg_id: str) -> None:
+    """Ack a run job message after successful processing. Call only after process_job completes successfully."""
+    r = _ensure_redis()
+    await r.xack(RUNS_QUEUE, CONSUMER_GROUP, msg_id)
 
 
 async def append_run_event(run_id: str, event_type: str, data: dict) -> str:
