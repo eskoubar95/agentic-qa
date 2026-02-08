@@ -1,5 +1,6 @@
 """Redis client for job queue and run events stream (Railway / standard Redis)."""
 
+import asyncio
 import json
 import time
 from typing import Any
@@ -10,7 +11,6 @@ redis_client: Any = None
 
 RUNS_QUEUE = "runs:queue"
 CONSUMER_GROUP = "run-workers"
-CONSUMER_NAME = "worker-1"
 
 
 async def close_redis() -> None:
@@ -70,7 +70,7 @@ async def ensure_consumer_group() -> None:
             raise
 
 
-async def consume_run_job(block_ms: int = 5000) -> dict | None:
+async def consume_run_job(consumer_name: str, block_ms: int = 5000) -> dict | None:
     """
     Consume one job from runs:queue via consumer group.
     Uses blocking XREADGROUP for efficient waiting (no polling).
@@ -79,7 +79,7 @@ async def consume_run_job(block_ms: int = 5000) -> dict | None:
     r = _ensure_redis()
     result = await r.xreadgroup(
         groupname=CONSUMER_GROUP,
-        consumername=CONSUMER_NAME,
+        consumername=consumer_name,
         streams={RUNS_QUEUE: ">"},
         count=1,
         block=block_ms,
@@ -150,3 +150,14 @@ async def read_run_events(
 def is_redis_available() -> bool:
     """Return True if Redis client is initialized."""
     return redis_client is not None
+
+
+async def redis_ping() -> bool:
+    """Verify Redis connectivity with ping. Returns False if uninit or ping fails."""
+    if redis_client is None:
+        return False
+    try:
+        await asyncio.wait_for(redis_client.ping(), timeout=2.0)
+        return True
+    except Exception:
+        return False

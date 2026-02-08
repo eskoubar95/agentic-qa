@@ -53,10 +53,10 @@ app.include_router(runs.router)
 @app.get("/health")
 async def health() -> dict:
     """Health check for Railway and load balancers. Includes DB and Redis."""
-    from app.redis_client import is_redis_available
+    from app.redis_client import redis_ping
 
     db_ok = await health_check()
-    redis_ok = is_redis_available()
+    redis_ok = await redis_ping()
     status = "healthy" if (db_ok and redis_ok) else "degraded"
     return {
         "status": status,

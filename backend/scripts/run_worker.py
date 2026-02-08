@@ -30,6 +30,16 @@ async def process_job(run_id: str, test_id: str) -> None:
         )
     if not test_row:
         await append_run_event(run_id, "error", {"message": "Test not found"})
+        async with get_connection() as conn:
+            await conn.execute(
+                """
+                UPDATE test_runs
+                SET status = 'failed', error = $1, completed_at = NOW(), duration_ms = 0
+                WHERE id = $2
+                """,
+                "Test not found",
+                uuid.UUID(run_id),
+            )
         return
 
     await append_run_event(
@@ -72,10 +82,15 @@ async def main() -> None:
 
     from app.redis_client import ensure_consumer_group
 
+    consumer_name = os.getenv(
+        "REDIS_CONSUMER_NAME",
+        f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}",
+    )
+
     await ensure_consumer_group()
     print("Worker started. Polling runs:queue...")
     while True:
-        job = await consume_run_job()
+        job = await consume_run_job(consumer_name)
         if job:
             run_id = job["run_id"]
             test_id = job["test_id"]
