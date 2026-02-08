@@ -3,9 +3,9 @@
 import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from app.agent.constants import STEP_TIMEOUT_MS
 
-STEP_TIMEOUT_MS = 30_000
+logger = logging.getLogger(__name__)
 
 # Action verbs to strip when extracting target text from instructions
 ACTION_VERBS = {"click", "fill", "enter", "type", "select", "choose"}
@@ -25,7 +25,11 @@ def extract_target_text(instruction: str) -> str:
 
 
 def determine_element_type(instruction: str) -> tuple[str, str]:
-    """Return (locator_type, role) e.g. ('role', 'button'), ('label', ''), ('text', '')."""
+    """Return (locator_type, role) e.g. ('role', 'button'), ('label', ''), ('text', '').
+
+    Uses substring matching; order of checks matters (e.g. 'input' before 'link').
+    For more complex instructions, consider priority ranking or structured parsing.
+    """
     if not instruction or not isinstance(instruction, str):
         return ("text", "")
     lower = instruction.lower()
@@ -39,13 +43,13 @@ def determine_element_type(instruction: str) -> tuple[str, str]:
 
 
 class SelectorStrategy:
-    """Execute action using advanced_selector. Returns result dict or None on failure."""
+    """Execute action using advanced_selector. Returns result dict, {"skipped": True}, or None on failure."""
 
     @staticmethod
     async def try_execute(page: Any, step: dict, action: str, value: str = "") -> dict | None:
         selector = (step.get("advanced_selector") or "").strip()
         if not selector:
-            return None
+            return {"skipped": True}
         try:
             if action == "click":
                 await page.click(selector, timeout=STEP_TIMEOUT_MS)

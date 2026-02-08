@@ -168,10 +168,10 @@ async def test_selector_strategy_success():
 
 
 @pytest.mark.asyncio
-async def test_selector_strategy_no_selector_returns_none():
+async def test_selector_strategy_no_selector_returns_skipped():
     page = AsyncMock()
     result = await SelectorStrategy.try_execute(page, {"instruction": "Click button"}, "click", "")
-    assert result is None
+    assert result is not None and result.get("skipped") is True
 
 
 @pytest.mark.asyncio
@@ -264,8 +264,8 @@ async def test_execute_click_instruction_only_dom_succeeds():
     result = await execute_click(page, {"instruction": "click Login"})
     assert result["status"] == "passed"
     assert result["strategy"] == "dom"
-    assert result["self_healed"] is True
-    assert result["attempts"] == 2  # selector skipped (no selector), then DOM succeeded
+    assert result["self_healed"] is False  # no prior attempt failed (selector was skipped)
+    assert result["attempts"] == 1  # only DOM ran (selector skipped)
 
 
 @pytest.mark.asyncio
@@ -278,7 +278,7 @@ async def test_execute_click_all_strategies_fail():
     result = await execute_click(page, {"instruction": "click Nonexistent"})
     assert result["status"] == "failed"
     assert "All strategies failed" in (result.get("error") or "")
-    assert result["attempts"] == 3
+    assert result["attempts"] == 2  # selector skipped; DOM and vision ran and failed
 
 
 # --- Executor integration (requires Redis, DB, Playwright) ---
