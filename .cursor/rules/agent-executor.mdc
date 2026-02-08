@@ -6,6 +6,8 @@ alwaysApply: false
 
 # Agent Executor
 
+**Code:** `backend/app/agent/strategies.py` (SelectorStrategy, DOMStrategy, VisionStrategy), `actions.py` (fallback chain for click/fill), `executor.py` (step_result and run-level self_healed).
+
 **Flow:** `.cursor/rules/diagrams.mdc` – "Self-healing (per step)" and "Execution" sequence.
 
 ## Fallback Chain (per step)
@@ -14,9 +16,9 @@ alwaysApply: false
 2. **DOM**: Playwright locators `get_by_text`, `get_by_role`, `get_by_label` from instruction. Success → mark `dom`. Fail → continue.
 3. **Vision**: Screenshot → OpenRouter (Claude 3.5 Sonnet) with instruction → parse coordinates → click/fill at coordinates. Mark `vision` and `self_healed: true`.
 
-Record in step_results: `strategy`, `self_healed`, `duration_ms`, `attempts`, `error` if any.
+Record in step_results: `strategy`, `self_healed`, `duration_ms`, `attempts`, `error` if any. `self_healed` is true only when a prior strategy attempted and failed (e.g. selector ran and failed, then DOM succeeded). `attempts` counts only strategies that actually ran (skipped strategies do not increment). Run-level `self_healed` in DB is true if any step has `self_healed: true`. Step validation: click/fill require `instruction`; `advanced_selector` is optional.
 
-## Session Memory
+## Session Memory (planned for future iteration)
 
 - Key: SHA256 of `{page_url}::{instruction.lower()}`.
 - Value: `action_data` (selector, strategy, coordinates, confidence). Track `reliability_score`, `success_count`, `failure_count`.

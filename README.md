@@ -53,7 +53,7 @@ agentic-qa/
 ├── frontend/        Next.js app (App Router, Tailwind)
 ├── backend/
 │   ├── app/
-│   │   ├── agent/       Playwright-based test executor (navigate, click, fill, verify)
+│   │   ├── agent/       Playwright executor: actions (navigate, click, fill, verify), strategies (selector → DOM → vision fallback)
 │   │   └── routers/     Tests CRUD, run, results, SSE stream
 │   └── scripts/
 │       ├── run_worker.py    Queue consumer; runs AgentExecutor

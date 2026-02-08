@@ -66,6 +66,18 @@ class RunTestResponse(BaseModel):
     run_id: UUID
 
 
+class StepResult(BaseModel):
+    """Single step execution result."""
+
+    step: int
+    status: str
+    strategy: str = "unknown"
+    self_healed: bool = False
+    duration_ms: int | None = None
+    attempts: int = 1
+    error: str | None = None
+
+
 class TestRunResponse(BaseModel):
     """Test run in API response."""
 
@@ -77,7 +89,7 @@ class TestRunResponse(BaseModel):
     duration_ms: int | None
     screenshots: list | None
     logs: list | None
-    step_results: list | None
+    step_results: list[StepResult] | None
     self_healed: bool
     llm_calls: int
     cost_usd: float
