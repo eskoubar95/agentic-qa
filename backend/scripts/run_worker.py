@@ -3,7 +3,10 @@
 
 import asyncio
 import json
+import logging
 import os
+import signal
+import socket
 import sys
 import time
 import uuid
@@ -15,6 +18,93 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Graceful shutdown flag (set by signal handlers)
+shutdown_requested = False
+
+# Worker stats for health monitoring
+jobs_processed = 0
+jobs_failed = 0
+total_processing_time_ms = 0.0
+worker_start_time = 0.0
+last_heartbeat_time = 0.0
+last_health_log_time = 0.0
+
+# Config from env (used by recovery and main loop)
+STUCK_RUN_TIMEOUT_MINUTES = int(os.getenv("STUCK_RUN_TIMEOUT_MINUTES", "10"))
+RECOVERY_CHECK_INTERVAL_SECONDS = int(os.getenv("RECOVERY_CHECK_INTERVAL_SECONDS", "60"))
+HEARTBEAT_IDLE_SECONDS = 30
+HEALTH_LOG_INTERVAL_SECONDS = 300
+
+logger = logging.getLogger("worker")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%SZ",
+)
+
+
+def _request_shutdown(signum: int | None, frame: object | None) -> None:
+    """Signal handler: set shutdown flag."""
+    global shutdown_requested
+    shutdown_requested = True
+    sig_name = "SIGTERM" if signum == signal.SIGTERM else "SIGINT"
+    logger.info("Shutdown requested via %s", sig_name)
+
+
+async def recover_stuck_runs() -> None:
+    """Background task: mark runs stuck > timeout as failed and emit error events."""
+    from app.database import get_connection
+    from app.redis_client import append_run_event
+
+    while not shutdown_requested:
+        try:
+            await asyncio.sleep(RECOVERY_CHECK_INTERVAL_SECONDS)
+            if shutdown_requested:
+                break
+            async with get_connection() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT id FROM test_runs
+                    WHERE status = 'running'
+                      AND started_at < NOW() - INTERVAL '1 minute' * $1
+                    """,
+                    STUCK_RUN_TIMEOUT_MINUTES,
+                )
+            for row in rows:
+                run_id = str(row["id"])
+                try:
+                    async with get_connection() as conn:
+                        await conn.execute(
+                            """
+                            UPDATE test_runs
+                            SET status = 'failed', error = $1, completed_at = NOW()
+                            WHERE id = $2
+                            """,
+                            "Execution timeout",
+                            row["id"],
+                        )
+                    await append_run_event(run_id, "error", {"message": "Execution timeout"})
+                    logger.warning("Recovered stuck run run_id=%s", run_id)
+                except Exception as e:
+                    logger.exception("Failed to recover stuck run run_id=%s: %s", run_id, e)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.exception("Stuck run recovery error: %s", e)
+
+
+def _is_transient_error(exc: BaseException) -> bool:
+    """Return True if the exception is a transient DB/Redis connection error."""
+    name = type(exc).__name__
+    mod = type(exc).__module__
+    if "Connection" in name or "Timeout" in name or "Network" in name:
+        return True
+    if "asyncpg" in mod:
+        return "Connection" in name or "Timeout" in name
+    if "redis" in mod:
+        return "Connection" in name or "Timeout" in name
+    return False
 
 
 async def process_job(run_id: str, test_id: str) -> None:
@@ -62,8 +152,15 @@ async def process_job(run_id: str, test_id: str) -> None:
 
 async def main() -> None:
     """Main worker loop: poll runs:queue and process jobs."""
-    from app.database import init_db
-    from app.redis_client import consume_run_job, init_redis
+    global worker_start_time, last_heartbeat_time, last_health_log_time
+    global jobs_processed, jobs_failed, total_processing_time_ms
+    from app.database import close_db, init_db
+    from app.redis_client import (
+        close_redis,
+        consume_run_job,
+        ensure_consumer_group,
+        init_redis,
+    )
 
     init_redis()
     await init_db()
@@ -71,49 +168,174 @@ async def main() -> None:
     from app.redis_client import is_redis_available
 
     if not is_redis_available():
-        print("ERROR: Redis not configured (REDIS_URL)")
+        logger.error("Redis not configured (REDIS_URL)")
         sys.exit(1)
 
-    from app.redis_client import ensure_consumer_group
-
+    # Consumer name: hostname-pid-uuid for multi-worker uniqueness
+    hostname = os.getenv("HOSTNAME") or socket.gethostname()
     consumer_name = os.getenv(
         "REDIS_CONSUMER_NAME",
-        f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}",
+        f"worker-{hostname}-{os.getpid()}-{uuid.uuid4().hex[:8]}",
     )
 
-    await ensure_consumer_group()
-    print("Worker started. Polling runs:queue...")
-    while True:
-        job = await consume_run_job(consumer_name)
-        if job:
-            run_id = job["run_id"]
-            test_id = job["test_id"]
-            print(f"Processing run_id={run_id} test_id={test_id}")
-            job_start = time.perf_counter()
-            try:
-                await process_job(run_id, test_id)
-            except Exception as e:
-                print(f"ERROR processing {run_id}: {e}")
-                from app.redis_client import append_run_event
+    # Register signal handlers (Phase 1)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, _request_shutdown)
+    signal.signal(signal.SIGINT, _request_shutdown)
 
-                await append_run_event(run_id, "error", {"message": str(e)})
-                from app.database import get_connection
+    # Ensure consumer group (Phase 5) with error handling
+    try:
+        await ensure_consumer_group()
+    except Exception as e:
+        logger.exception("Failed to ensure consumer group: %s", e)
+        sys.exit(1)
 
-                duration_ms = int((time.perf_counter() - job_start) * 1000)
-                async with get_connection() as conn:
-                    await conn.execute(
-                        """
-                        UPDATE test_runs
-                        SET status = 'failed', error = $1,
-                            completed_at = NOW(), duration_ms = $2
-                        WHERE id = $3
-                        """,
-                        str(e),
-                        duration_ms,
-                        uuid.UUID(run_id),
+    # Startup logging (Phase 4)
+    worker_start_time = time.monotonic()
+    last_heartbeat_time = worker_start_time
+    last_health_log_time = worker_start_time
+    has_redis = bool(os.getenv("REDIS_URL"))
+    has_db = bool(os.getenv("DATABASE_URL"))
+    logger.info(
+        "Worker started. consumer=%s redis_configured=%s database_configured=%s",
+        consumer_name,
+        has_redis,
+        has_db,
+    )
+    logger.info(
+        "Config: STUCK_RUN_TIMEOUT_MINUTES=%s RECOVERY_CHECK_INTERVAL_SECONDS=%s",
+        STUCK_RUN_TIMEOUT_MINUTES,
+        RECOVERY_CHECK_INTERVAL_SECONDS,
+    )
+
+    # Start stuck run recovery task (Phase 2)
+    recovery_task = asyncio.create_task(recover_stuck_runs())
+
+    try:
+        while not shutdown_requested:
+            job = await consume_run_job(consumer_name)
+            if job:
+                run_id = job["run_id"]
+                test_id = job["test_id"]
+                logger.info("Processing run_id=%s test_id=%s", run_id, test_id)
+                job_start = time.perf_counter()
+                last_heartbeat_time = time.monotonic()
+
+                # Phase 3: broad try/except, retry for transient errors, always update DB on failure
+                last_exc: BaseException | None = None
+                failure_handled_in_loop = False
+                for attempt in range(3):
+                    try:
+                        await process_job(run_id, test_id)
+                        jobs_processed += 1
+                        total_processing_time_ms += (time.perf_counter() - job_start) * 1000
+                        break
+                    except Exception as e:
+                        last_exc = e
+                        if attempt < 2 and _is_transient_error(e) and not shutdown_requested:
+                            delay = 2**attempt
+                            logger.warning(
+                                "Transient error run_id=%s attempt=%s: %s; retry in %ss",
+                                run_id,
+                                attempt + 1,
+                                e,
+                                delay,
+                            )
+                            await asyncio.sleep(delay)
+                        else:
+                            break
+                else:
+                    # Exhausted 3 attempts (all transient)
+                    if last_exc:
+                        logger.error(
+                            "run_id=%s test_id=%s failed after 3 attempts: %s",
+                            run_id,
+                            test_id,
+                            last_exc,
+                            exc_info=True,
+                        )
+                        from app.redis_client import append_run_event
+
+                        await append_run_event(run_id, "error", {"message": str(last_exc)})
+                        duration_ms = int((time.perf_counter() - job_start) * 1000)
+                        from app.database import get_connection
+
+                        async with get_connection() as conn:
+                            await conn.execute(
+                                """
+                                UPDATE test_runs
+                                SET status = 'failed', error = $1,
+                                    completed_at = NOW(), duration_ms = $2
+                                WHERE id = $3
+                                """,
+                                str(last_exc),
+                                duration_ms,
+                                uuid.UUID(run_id),
+                            )
+                        jobs_failed += 1
+                        failure_handled_in_loop = True
+
+                # Non-transient failure on attempt 0 or 1 (broke out before exhausting retries)
+                if last_exc and not failure_handled_in_loop and not _is_transient_error(last_exc):
+                    logger.error(
+                        "run_id=%s test_id=%s error: %s",
+                        run_id,
+                        test_id,
+                        last_exc,
+                        exc_info=True,
                     )
-        else:
-            await asyncio.sleep(1)
+                    from app.redis_client import append_run_event
+
+                    await append_run_event(run_id, "error", {"message": str(last_exc)})
+                    duration_ms = int((time.perf_counter() - job_start) * 1000)
+                    from app.database import get_connection
+
+                    try:
+                        async with get_connection() as conn:
+                            await conn.execute(
+                                """
+                                UPDATE test_runs
+                                SET status = 'failed', error = $1,
+                                    completed_at = NOW(), duration_ms = $2
+                                WHERE id = $3
+                                """,
+                                str(last_exc),
+                                duration_ms,
+                                uuid.UUID(run_id),
+                            )
+                    except Exception as db_err:
+                        logger.exception("Failed to update test_runs on error: %s", db_err)
+                    jobs_failed += 1
+            else:
+                now = time.monotonic()
+                # Idle heartbeat every 30s (Phase 4)
+                if now - last_heartbeat_time >= HEARTBEAT_IDLE_SECONDS:
+                    logger.info("Worker idle heartbeat")
+                    last_heartbeat_time = now
+                # Health log every 5 min
+                if now - last_health_log_time >= HEALTH_LOG_INTERVAL_SECONDS:
+                    uptime_sec = int(now - worker_start_time)
+                    avg_ms = int(total_processing_time_ms / jobs_processed) if jobs_processed else 0
+                    logger.info(
+                        "Health uptime_sec=%s jobs_processed=%s jobs_failed=%s avg_ms=%s",
+                        uptime_sec,
+                        jobs_processed,
+                        jobs_failed,
+                        avg_ms,
+                    )
+                    last_health_log_time = now
+                await asyncio.sleep(1)
+    finally:
+        recovery_task.cancel()
+        try:
+            await recovery_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Shutting down: closing database and Redis connections")
+        await close_db()
+        await close_redis()
+        logger.info("Worker stopped")
+    sys.exit(0)
 
 
 if __name__ == "__main__":
