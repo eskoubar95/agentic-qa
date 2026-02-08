@@ -44,7 +44,7 @@ logging.basicConfig(
 )
 
 
-def _request_shutdown(signum: int | None, frame: object | None) -> None:
+def handle_shutdown(signum: int | None, frame: object | None) -> None:
     """Signal handler: set shutdown event so loop exits cleanly."""
     if shutdown_event is not None:
         shutdown_event.set()
@@ -52,46 +52,47 @@ def _request_shutdown(signum: int | None, frame: object | None) -> None:
     logger.info("Shutdown requested via %s", sig_name)
 
 
-async def recover_stuck_runs(delay_seconds: int = RECOVERY_CHECK_INTERVAL_SECONDS) -> None:
-    """Background task: find test_runs stuck in 'running' > timeout, mark failed, emit error event."""
+async def recover_stuck_runs() -> None:
+    """One pass: find test_runs stuck in 'running' > timeout, mark failed, emit error event."""
     from app.database import get_connection
     from app.redis_client import append_run_event
 
-    while shutdown_event is not None and not shutdown_event.is_set():
+    async with get_connection() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id FROM test_runs
+            WHERE status = 'running'
+              AND started_at < NOW() - INTERVAL '1 minute' * $1
+            """,
+            STUCK_RUN_TIMEOUT_MINUTES,
+        )
+    for row in rows:
+        run_id = str(row["id"])
         try:
-            await asyncio.sleep(delay_seconds)
-            if shutdown_event.is_set():
-                break
             async with get_connection() as conn:
-                rows = await conn.fetch(
+                await conn.execute(
                     """
-                    SELECT id FROM test_runs
-                    WHERE status = 'running'
-                      AND started_at < NOW() - INTERVAL '1 minute' * $1
+                    UPDATE test_runs
+                    SET status = 'failed', error = $1, completed_at = NOW()
+                    WHERE id = $2
                     """,
-                    STUCK_RUN_TIMEOUT_MINUTES,
+                    "Stuck - timeout",
+                    row["id"],
                 )
-            for row in rows:
-                run_id = str(row["id"])
-                try:
-                    async with get_connection() as conn:
-                        await conn.execute(
-                            """
-                            UPDATE test_runs
-                            SET status = 'failed', error = $1, completed_at = NOW()
-                            WHERE id = $2
-                            """,
-                            "Execution timeout",
-                            row["id"],
-                        )
-                    await append_run_event(run_id, "error", {"message": "Execution timeout"})
-                    logger.warning("Recovered stuck run run_id=%s", run_id)
-                except Exception as e:
-                    logger.exception("Failed to recover stuck run run_id=%s: %s", run_id, e)
-        except asyncio.CancelledError:
-            break
+            await append_run_event(run_id, "error", {"message": "Stuck - timeout"})
+            logger.warning("Recovered stuck run run_id=%s", run_id)
         except Exception as e:
-            logger.exception("Stuck run recovery error: %s", e)
+            logger.exception("Failed to recover stuck run run_id=%s: %s", run_id, e)
+
+
+async def recover_stuck_runs_periodically(interval: int = 300) -> None:
+    """Loop: call recover_stuck_runs() then sleep(interval) until shutdown."""
+    try:
+        while shutdown_event is not None and not shutdown_event.is_set():
+            await recover_stuck_runs()
+            await asyncio.sleep(interval)
+    except asyncio.CancelledError:
+        pass
 
 
 def _is_transient_error(exc: BaseException) -> bool:
@@ -190,9 +191,9 @@ async def main() -> None:
     )
 
     # Register signal handlers for graceful shutdown
-    signal.signal(signal.SIGINT, lambda s, f: _request_shutdown(s, f))
+    signal.signal(signal.SIGINT, handle_shutdown)
     if hasattr(signal, "SIGTERM"):
-        signal.signal(signal.SIGTERM, lambda s, f: _request_shutdown(s, f))
+        signal.signal(signal.SIGTERM, handle_shutdown)
 
     # Ensure consumer group (Phase 5) with error handling
     try:
@@ -219,8 +220,10 @@ async def main() -> None:
         RECOVERY_CHECK_INTERVAL_SECONDS,
     )
 
-    # Start stuck run recovery task (runs every RECOVERY_CHECK_INTERVAL_SECONDS, default 5 min)
-    periodic_recovery = asyncio.create_task(recover_stuck_runs(RECOVERY_CHECK_INTERVAL_SECONDS))
+    # Start stuck run recovery task (runs every 300s / RECOVERY_CHECK_INTERVAL_SECONDS)
+    recovery_task = asyncio.create_task(
+        recover_stuck_runs_periodically(RECOVERY_CHECK_INTERVAL_SECONDS)
+    )
 
     try:
         while not shutdown_event.is_set():
@@ -339,9 +342,9 @@ async def main() -> None:
                     last_health_log_time = now
                 await asyncio.sleep(1)
     finally:
-        periodic_recovery.cancel()
+        recovery_task.cancel()
         try:
-            await periodic_recovery
+            await recovery_task
         except asyncio.CancelledError:
             pass
         logger.info("Shutting down: closing database and Redis connections")
